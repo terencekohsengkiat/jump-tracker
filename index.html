@@ -210,6 +210,16 @@
   .loading-overlay p { font-size: 14px; color: var(--text-muted); }
   .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 16px; }
   .no-data { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 15px; }
+  .camera-switch-btn {
+    position: absolute; top: 10px; right: 10px; z-index: 15;
+    background: rgba(0,0,0,0.6); border: 1px solid var(--border);
+    border-radius: 50%; width: 42px; height: 42px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; backdrop-filter: blur(4px); color: var(--text);
+    transition: background 0.15s;
+  }
+  .camera-switch-btn:active { background: rgba(88,166,255,0.3); }
+  .camera-switch-btn svg { width: 20px; height: 20px; }
   .calib-scale { font-size: 22px; font-weight: 700; color: var(--success); }
   #calib-result { margin-top: 12px; display: none; }
   #calib-result.visible { display: block; }
@@ -250,6 +260,9 @@
         <video id="calib-video" autoplay playsinline muted></video>
         <canvas id="calib-canvas"></canvas>
         <div id="calib-status-badge">Loading model...</div>
+        <button class="camera-switch-btn" id="btn-switch-calib" onclick="switchCamera()" title="Switch Camera" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-3.5l-1.8-2.5A1 1 0 0014 4H10a1 1 0 00-.8.4L7.5 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><circle cx="12" cy="13" r="3"/><path d="M16 2l2 2-2 2"/><path d="M8 2L6 4l2 2"/></svg>
+        </button>
         <div class="loading-overlay" id="calib-loading">
           <div class="spinner"></div>
           <p>Loading pose model…</p>
@@ -283,6 +296,9 @@
         <video id="rec-video" autoplay playsinline muted></video>
         <canvas id="rec-canvas"></canvas>
         <div id="status-badge">READY</div>
+        <button class="camera-switch-btn" id="btn-switch-rec" onclick="switchCamera()" title="Switch Camera" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7h-3.5l-1.8-2.5A1 1 0 0014 4H10a1 1 0 00-.8.4L7.5 7H4a2 2 0 00-2 2v9a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z"/><circle cx="12" cy="13" r="3"/><path d="M16 2l2 2-2 2"/><path d="M8 2L6 4l2 2"/></svg>
+        </button>
         <div id="live-metrics">
           <div class="live-metric"><div class="lm-label">Height</div><div class="lm-value" id="lm-height">—</div></div>
           <div class="live-metric"><div class="lm-label">Flight</div><div class="lm-value" id="lm-flight">—</div></div>
@@ -426,12 +442,31 @@ function attachStreamToVideo(video) {
 }
 
 // ─── CAMERA ───────────────────────────────────────────────────────────────────
-async function startCamera() {
+let availableCameras = [];
+let currentCameraIdx = 0;
+
+async function enumerateCameras() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 1280 } },
-      audio: false
-    });
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    availableCameras = devices.filter(d => d.kind === 'videoinput');
+    const showBtn = availableCameras.length > 1;
+    document.getElementById('btn-switch-calib').style.display = showBtn ? 'flex' : 'none';
+    document.getElementById('btn-switch-rec').style.display = showBtn ? 'flex' : 'none';
+  } catch (e) {
+    availableCameras = [];
+  }
+}
+
+async function startCamera(deviceId = null) {
+  // Stop any existing tracks first
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+  const videoConstraints = deviceId
+    ? { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 1280 } }
+    : { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 1280 } };
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
   } catch (err) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -441,6 +476,28 @@ async function startCamera() {
     }
   }
   return true;
+}
+
+async function switchCamera() {
+  if (availableCameras.length <= 1) { showToast('No other cameras available'); return; }
+  currentCameraIdx = (currentCameraIdx + 1) % availableCameras.length;
+  const deviceId = availableCameras[currentCameraIdx].deviceId;
+  const ok = await startCamera(deviceId);
+  if (!ok) return;
+
+  // Re-attach new stream to whichever video elements are active
+  const calibVideo = document.getElementById('calib-video');
+  const recVideo = document.getElementById('rec-video');
+  if (loopMode === 'calibrate') {
+    calibVideo.srcObject = stream;
+    calibVideo.play().catch(() => {});
+  } else if (loopMode === 'record') {
+    recVideo.srcObject = stream;
+    recVideo.play().catch(() => {});
+  }
+
+  const label = availableCameras[currentCameraIdx].label || `Camera ${currentCameraIdx + 1}`;
+  showToast(`Switched to: ${label.slice(0, 30)}`);
 }
 
 // ─── MODEL LOADING ────────────────────────────────────────────────────────────
@@ -979,6 +1036,13 @@ document.getElementById('btn-start-calib').addEventListener('click', async () =>
 
   const ok = await startCamera();
   if (!ok) return;
+  await enumerateCameras(); // populate camera list now that permission is granted
+  // Sync currentCameraIdx to whichever device the browser chose
+  if (stream && availableCameras.length > 0) {
+    const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId;
+    const idx = availableCameras.findIndex(c => c.deviceId === activeId);
+    if (idx !== -1) currentCameraIdx = idx;
+  }
   attachStreamToVideo(document.getElementById('calib-video'));
 
   showScreen('calib');
