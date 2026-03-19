@@ -122,12 +122,29 @@
     aspect-ratio: 9/16;
     max-height: 55vh;
   }
-  .camera-wrap video, .camera-wrap canvas {
+  .camera-wrap video {
     position: absolute; top: 0; left: 0;
     width: 100%; height: 100%;
     object-fit: cover;
+    transform: scaleX(-1);
   }
-  .camera-wrap canvas { pointer-events: none; }
+  .camera-wrap canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    transform: scaleX(-1);
+    pointer-events: none;
+  }
+  .zoom-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px;
+  }
+  .zoom-row svg { width: 18px; height: 18px; color: var(--text-muted); flex-shrink: 0; }
+  .zoom-row input[type="range"] {
+    flex: 1; accent-color: var(--accent); cursor: pointer;
+    width: auto; padding: 0; background: none; border: none; border-radius: 0; height: 4px;
+  }
+  .zoom-label { font-size: 13px; color: var(--accent); font-weight: 700; min-width: 34px; text-align: right; }
   #status-badge {
     position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.75); border: 1px solid var(--border);
@@ -268,6 +285,11 @@
           <p>Loading pose model…</p>
         </div>
       </div>
+      <div class="zoom-row">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+        <input type="range" class="zoom-slider" min="0" max="100" value="0" oninput="handleZoom(this.value)">
+        <span class="zoom-label">1×</span>
+      </div>
       <div id="calib-result">
         <div class="card">
           <div class="card-title">Detected Scale</div>
@@ -304,6 +326,11 @@
           <div class="live-metric"><div class="lm-label">Flight</div><div class="lm-value" id="lm-flight">—</div></div>
           <div class="live-metric"><div class="lm-label">Phase</div><div class="lm-value" id="lm-phase">—</div></div>
         </div>
+      </div>
+      <div class="zoom-row">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>
+        <input type="range" class="zoom-slider" min="0" max="100" value="0" oninput="handleZoom(this.value)">
+        <span class="zoom-label">1×</span>
       </div>
       <div class="result-box" id="result-box">
         <div class="result-title">Last Jump Result</div>
@@ -457,13 +484,13 @@ async function enumerateCameras() {
   }
 }
 
+// No resolution constraints — let the OS pick native resolution/FOV to avoid digital zoom
 async function startCamera(deviceId = null) {
-  // Stop any existing tracks first
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
 
   const videoConstraints = deviceId
-    ? { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 1280 } }
-    : { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 1280 } };
+    ? { deviceId: { exact: deviceId } }
+    : { facingMode: 'environment' };
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
@@ -476,6 +503,49 @@ async function startCamera(deviceId = null) {
     }
   }
   return true;
+}
+
+// ─── ZOOM ─────────────────────────────────────────────────────────────────────
+let hwZoom = false;
+let hwZoomMin = 1, hwZoomMax = 1;
+
+async function initZoom() {
+  if (!stream) return;
+  const track = stream.getVideoTracks()[0];
+  if (!track) return;
+  hwZoom = false;
+  try {
+    const caps = track.getCapabilities?.();
+    if (caps && caps.zoom) {
+      hwZoom = true;
+      hwZoomMin = caps.zoom.min;
+      hwZoomMax = caps.zoom.max;
+      // Start at minimum zoom (widest field of view)
+      await track.applyConstraints({ advanced: [{ zoom: hwZoomMin }] });
+    }
+  } catch(e) {}
+  // Reset all sliders to 0 (= minimum zoom / widest)
+  document.querySelectorAll('.zoom-slider').forEach(s => s.value = 0);
+  document.querySelectorAll('.zoom-label').forEach(l => l.textContent = '1×');
+}
+
+async function handleZoom(value) {
+  const pct = parseFloat(value) / 100;
+  document.querySelectorAll('.zoom-slider').forEach(s => s.value = value);
+
+  if (hwZoom && stream) {
+    const track = stream.getVideoTracks()[0];
+    const zoomVal = hwZoomMin + pct * (hwZoomMax - hwZoomMin);
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: zoomVal }] });
+      const displayZoom = hwZoomMin > 0 ? (zoomVal / hwZoomMin).toFixed(1) : zoomVal.toFixed(1);
+      document.querySelectorAll('.zoom-label').forEach(l => l.textContent = displayZoom + '×');
+    } catch(e) {}
+  } else {
+    // Hardware zoom unavailable — show note on first slide
+    if (pct > 0) showToast('Hardware zoom not supported on this camera');
+    document.querySelectorAll('.zoom-label').forEach(l => l.textContent = '1×');
+  }
 }
 
 async function switchCamera() {
@@ -496,6 +566,7 @@ async function switchCamera() {
     recVideo.play().catch(() => {});
   }
 
+  await initZoom(); // re-init zoom range for new camera
   const label = availableCameras[currentCameraIdx].label || `Camera ${currentCameraIdx + 1}`;
   showToast(`Switched to: ${label.slice(0, 30)}`);
 }
@@ -1036,7 +1107,7 @@ document.getElementById('btn-start-calib').addEventListener('click', async () =>
 
   const ok = await startCamera();
   if (!ok) return;
-  await enumerateCameras(); // populate camera list now that permission is granted
+  await Promise.all([enumerateCameras(), initZoom()]); // populate cameras + set min zoom
   // Sync currentCameraIdx to whichever device the browser chose
   if (stream && availableCameras.length > 0) {
     const activeId = stream.getVideoTracks()[0]?.getSettings().deviceId;
@@ -1144,6 +1215,7 @@ async function init() {
   if (calibLocked && athlete.name) {
     const ok = await startCamera();
     if (ok) {
+      await Promise.all([enumerateCameras(), initZoom()]);
       if (!detector) await loadModel();
       document.getElementById('bottom-nav').classList.add('visible');
       attachStreamToVideo(document.getElementById('rec-video'));
