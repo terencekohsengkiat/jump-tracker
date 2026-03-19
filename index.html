@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Jump Tracker — S&C Coach</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --success: #3fb950;
+    --danger: #f85149;
+    --warning: #e3b341;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --radius: 8px;
+  }
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* HEADER */
+  #header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    min-height: 52px;
+  }
+  #header h1 { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -0.3px; }
+  #header-info { font-size: 12px; color: var(--text-muted); text-align: right; line-height: 1.4; }
+
+  /* SCREENS */
+  #main { flex: 1; overflow-y: auto; overflow-x: hidden; }
+  .screen { display: none; padding: 16px; min-height: 100%; }
+  .screen.active { display: block; }
+
+  /* BOTTOM NAV */
+  #bottom-nav {
+    display: none;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #bottom-nav.visible { display: flex; }
+  #bottom-nav button {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    padding: 12px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-height: 56px;
+    transition: color 0.15s;
+  }
+  #bottom-nav button.active { color: var(--accent); }
+  #bottom-nav button svg { width: 22px; height: 22px; }
+
+  /* FORMS */
+  .form-group { margin-bottom: 14px; }
+  label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  input[type="text"], input[type="number"], select {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    padding: 12px 14px;
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.15s;
+    -webkit-appearance: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238b949e' d='M6 8L0 0h12z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
+
+  /* BUTTONS */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: none; border-radius: var(--radius); cursor: pointer;
+    font-size: 15px; font-weight: 600; padding: 14px 20px;
+    min-height: 48px; transition: opacity 0.15s, transform 0.1s;
+    width: 100%; text-align: center;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); color: #0d1117; }
+  .btn-success { background: var(--success); color: #0d1117; }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-secondary { background: var(--border); color: var(--text); }
+  .btn-sm { padding: 8px 12px; min-height: 36px; font-size: 13px; width: auto; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* CARDS */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+  .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-muted); margin-bottom: 4px; }
+  .card-value { font-size: 28px; font-weight: 700; color: var(--text); }
+  .card-unit { font-size: 14px; color: var(--text-muted); font-weight: 400; }
+  .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+
+  /* CAMERA */
+  .camera-wrap {
+    position: relative;
+    background: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 14px;
+    width: 100%;
+    aspect-ratio: 9/16;
+    max-height: 55vh;
+  }
+  .camera-wrap video, .camera-wrap canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  .camera-wrap canvas { pointer-events: none; }
+  #status-badge {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.75); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 16px;
+    font-size: 14px; font-weight: 700; color: var(--text);
+    white-space: nowrap; z-index: 10;
+    backdrop-filter: blur(4px);
+  }
+  #calib-status-badge {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.75); border: 1px solid var(--border);
+    border-radius: 20px; padding: 6px 16px;
+    font-size: 14px; font-weight: 700; color: var(--text);
+    white-space: nowrap; z-index: 10;
+    backdrop-filter: blur(4px);
+  }
+  #live-metrics {
+    position: absolute; bottom: 10px; left: 10px; right: 10px;
+    display: flex; gap: 8px; z-index: 10;
+  }
+  .live-metric {
+    flex: 1; background: rgba(0,0,0,0.75); border-radius: 6px;
+    padding: 6px 8px; text-align: center; backdrop-filter: blur(4px);
+  }
+  .live-metric .lm-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+  .live-metric .lm-value { font-size: 16px; font-weight: 700; color: var(--accent); }
+  .jump-type-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .type-btn {
+    flex: 1; background: var(--surface); border: 2px solid var(--border);
+    border-radius: var(--radius); padding: 12px 4px; color: var(--text);
+    font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.15s;
+    min-height: 48px;
+  }
+  .type-btn.selected { border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,0.08); }
+  .result-box {
+    background: var(--surface); border: 1px solid var(--success);
+    border-radius: var(--radius); padding: 14px; margin-bottom: 14px;
+    display: none;
+  }
+  .result-box.visible { display: block; }
+  .result-title { font-size: 12px; color: var(--success); font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .result-item .ri-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+  .result-item .ri-value { font-size: 20px; font-weight: 700; }
+
+  /* TABLE */
+  .table-wrap { overflow-x: auto; margin-bottom: 16px; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 500px; }
+  th { background: var(--surface); color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+  /* TOAST */
+  #toast {
+    position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px; padding: 10px 20px;
+    font-size: 14px; font-weight: 600; color: var(--text);
+    opacity: 0; transition: opacity 0.25s, transform 0.25s;
+    z-index: 1000; white-space: nowrap; pointer-events: none;
+    max-width: 90vw; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* MISC */
+  .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 10px; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  .loading-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 20; gap: 12px;
+  }
+  .spinner {
+    width: 36px; height: 36px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-overlay p { font-size: 14px; color: var(--text-muted); }
+  .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 16px; }
+  .no-data { text-align: center; padding: 40px 20px; color: var(--text-muted); font-size: 15px; }
+  .calib-scale { font-size: 22px; font-weight: 700; color: var(--success); }
+  #calib-result { margin-top: 12px; display: none; }
+  #calib-result.visible { display: block; }
+  .instr { background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.3); border-radius: var(--radius); padding: 12px 14px; font-size: 13px; color: var(--text); line-height: 1.6; margin-bottom: 14px; }
+  .instr strong { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <h1>⚡ Jump Tracker</h1>
+    <div id="header-info"></div>
+  </header>
+
+  <div id="main">
+    <!-- SETUP SCREEN -->
+    <div id="screen-setup" class="screen active">
+      <div class="instr"><strong>Welcome!</strong> Enter athlete details to begin. Data saves to local storage automatically.</div>
+      <div class="form-group">
+        <label>Athlete Name</label>
+        <input type="text" id="inp-name" placeholder="e.g. Alex Johnson" autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Height (cm)</label>
+        <input type="number" id="inp-height" placeholder="175" min="100" max="250">
+      </div>
+      <div class="form-group">
+        <label>Weight (kg)</label>
+        <input type="number" id="inp-weight" placeholder="75" min="30" max="200">
+      </div>
+      <button class="btn btn-primary" id="btn-start-calib">Start Calibration →</button>
+    </div>
+
+    <!-- CALIBRATION SCREEN -->
+    <div id="screen-calib" class="screen">
+      <div class="instr"><strong>Stand straight</strong> facing the camera. Keep your full body in view — head to ankles. Press <strong>Auto Detect</strong> then <strong>Lock Calibration</strong>.</div>
+      <div class="camera-wrap" id="calib-camera-wrap">
+        <video id="calib-video" autoplay playsinline muted></video>
+        <canvas id="calib-canvas"></canvas>
+        <div id="calib-status-badge">Loading model...</div>
+        <div class="loading-overlay" id="calib-loading">
+          <div class="spinner"></div>
+          <p>Loading pose model…</p>
+        </div>
+      </div>
+      <div id="calib-result">
+        <div class="card">
+          <div class="card-title">Detected Scale</div>
+          <div class="calib-scale" id="calib-px-cm">— px/cm</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; margin-bottom:12px;">
+        <button class="btn btn-secondary" id="btn-detect" style="flex:1" disabled>Auto Detect</button>
+        <button class="btn btn-success" id="btn-lock-calib" style="flex:1" disabled>Lock Calibration</button>
+      </div>
+      <button class="btn btn-secondary" id="btn-back-setup">← Back</button>
+    </div>
+
+    <!-- RECORD SCREEN -->
+    <div id="screen-record" class="screen">
+      <div class="jump-type-row">
+        <button class="type-btn selected" data-type="CMJ">CMJ</button>
+        <button class="type-btn" data-type="SJ">SJ</button>
+        <button class="type-btn" data-type="DJ">DJ</button>
+      </div>
+      <div id="dj-height-wrap" class="form-group" style="display:none;">
+        <label>Drop Height (cm)</label>
+        <input type="number" id="inp-drop-height" placeholder="30" min="5" max="150">
+      </div>
+      <div class="camera-wrap" id="rec-camera-wrap">
+        <video id="rec-video" autoplay playsinline muted></video>
+        <canvas id="rec-canvas"></canvas>
+        <div id="status-badge">READY</div>
+        <div id="live-metrics">
+          <div class="live-metric"><div class="lm-label">Height</div><div class="lm-value" id="lm-height">—</div></div>
+          <div class="live-metric"><div class="lm-label">Flight</div><div class="lm-value" id="lm-flight">—</div></div>
+          <div class="live-metric"><div class="lm-label">Phase</div><div class="lm-value" id="lm-phase">—</div></div>
+        </div>
+      </div>
+      <div class="result-box" id="result-box">
+        <div class="result-title">Last Jump Result</div>
+        <div class="result-grid" id="result-grid"></div>
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-success" id="btn-record" style="flex:2">Record Jump</button>
+        <button class="btn btn-danger" id="btn-cancel" style="flex:1" disabled>Cancel</button>
+      </div>
+    </div>
+
+    <!-- SUMMARY SCREEN -->
+    <div id="screen-summary" class="screen">
+      <div id="summary-no-data" class="no-data" style="display:none;">
+        <p style="font-size:40px; margin-bottom:12px;">📊</p>
+        <p>No jumps recorded yet.<br>Switch to Record tab to begin.</p>
+      </div>
+      <div id="summary-content">
+        <div class="metrics-grid" id="avg-cards"></div>
+        <div class="chart-wrap"><canvas id="height-chart" height="200"></canvas></div>
+        <div class="section-title">Jump Log</div>
+        <div class="table-wrap"><table id="jump-table">
+          <thead><tr><th>#</th><th>Type</th><th>Height (cm)</th><th>Flight (ms)</th><th>Squat (cm)</th><th>RSI</th><th>GCT (ms)</th><th></th></tr></thead>
+          <tbody id="jump-tbody"></tbody>
+        </table></div>
+        <div style="display:flex; gap:10px; margin-bottom:60px;">
+          <button class="btn btn-secondary" id="btn-export-csv" style="flex:1">Export CSV</button>
+          <button class="btn btn-danger" id="btn-new-session" style="flex:1">New Session</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <nav id="bottom-nav">
+    <button id="nav-record" class="active" onclick="showScreen('record')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+      Record
+    </button>
+    <button id="nav-summary" onclick="showScreen('summary')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 17V13M12 17V8M16 17V11"/></svg>
+      Summary
+    </button>
+  </nav>
+</div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+const G = 9.81;
+let athlete = { name: '', height: 175, weight: 70 };
+let session = [];
+let pixelPerCm = null;
+let bodyHeightPx = null;
+let detector = null;
+let stream = null;
+let rafId = null;
+let loopMode = null; // 'calibrate' | 'record'
+let detectedScale = null;
+let calibLocked = false;
+let jumpType = 'CMJ';
+
+// Jump state machine
+let jumpState = 'IDLE'; // IDLE | COUNTDOWN | BASELINE | MONITORING | AIRBORNE | DROP_WAIT | DROP_LANDING | DROP_AIRBORNE | DONE
+let countdownStart = null;
+let baselineFrames = [];
+let baselineAnkleY = null;
+let baselineHipY = null;
+let airborneStart = null;
+let squatMin = null; // most negative hip displacement (pixels, positive = down)
+let takeoffTime = null;
+let landingTime = null;
+let djDropLandingTime = null;
+let djTakeoffTime = null;
+let djLandingTime = null;
+let djAnklesGone = false;
+
+// Chart
+let heightChart = null;
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+function saveAthlete() { localStorage.setItem('jt_athlete', JSON.stringify(athlete)); }
+function loadAthlete() {
+  const d = localStorage.getItem('jt_athlete');
+  if (d) { try { athlete = JSON.parse(d); } catch(e){} }
+}
+function saveSession() { localStorage.setItem('jt_session', JSON.stringify(session)); }
+function loadSession() {
+  const d = localStorage.getItem('jt_session');
+  if (d) { try { session = JSON.parse(d); } catch(e){} }
+}
+function saveCalib() {
+  if (pixelPerCm) localStorage.setItem('jt_calib', JSON.stringify({ pixelPerCm, bodyHeightPx }));
+}
+function loadCalib() {
+  const d = localStorage.getItem('jt_calib');
+  if (d) { try { const c = JSON.parse(d); pixelPerCm = c.pixelPerCm; bodyHeightPx = c.bodyHeightPx; calibLocked = true; } catch(e){} }
+}
+
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, duration = 2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+
+// ─── SCREENS ──────────────────────────────────────────────────────────────────
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  document.querySelectorAll('#bottom-nav button').forEach(b => b.classList.remove('active'));
+  const navBtn = document.getElementById('nav-' + name);
+  if (navBtn) navBtn.classList.add('active');
+
+  if (name === 'record') {
+    loopMode = 'record';
+    attachStreamToVideo(document.getElementById('rec-video'));
+  } else if (name === 'calib') {
+    loopMode = 'calibrate';
+    attachStreamToVideo(document.getElementById('calib-video'));
+  } else if (name === 'summary') {
+    loopMode = null;
+    renderSummary();
+  }
+}
+
+function attachStreamToVideo(video) {
+  if (stream && video.srcObject !== stream) {
+    video.srcObject = stream;
+    video.play().catch(() => {});
+  }
+}
+
+// ─── CAMERA ───────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 1280 } },
+      audio: false
+    });
+  } catch (err) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (e) {
+      showToast('Camera permission denied. Please allow camera access.');
+      return false;
+    }
+  }
+  return true;
+}
+
+// ─── MODEL LOADING ────────────────────────────────────────────────────────────
+async function loadModel() {
+  try {
+    detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+    );
+    return true;
+  } catch (e) {
+    showToast('Failed to load pose model: ' + e.message);
+    return false;
+  }
+}
+
+// ─── SKELETON DRAWING ─────────────────────────────────────────────────────────
+const CONNECTIONS = [[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+const KP_COLORS = { default: '#58a6ff', hip: '#e3b341', ankle: '#3fb950' };
+
+function drawSkeleton(ctx, keypoints, scaleX, scaleY) {
+  if (!keypoints || keypoints.length === 0) return;
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#58a6ff';
+  for (const [a, b] of CONNECTIONS) {
+    const kpA = keypoints[a];
+    const kpB = keypoints[b];
+    if (kpA && kpB && kpA.score > 0.25 && kpB.score > 0.25) {
+      ctx.beginPath();
+      ctx.moveTo(kpA.x * scaleX, kpA.y * scaleY);
+      ctx.lineTo(kpB.x * scaleX, kpB.y * scaleY);
+      ctx.stroke();
+    }
+  }
+  keypoints.forEach((kp, i) => {
+    if (!kp || kp.score < 0.25) return;
+    let color = '#58a6ff';
+    if (i === 11 || i === 12) color = '#e3b341';
+    if (i === 15 || i === 16) color = '#3fb950';
+    ctx.beginPath();
+    ctx.arc(kp.x * scaleX, kp.y * scaleY, 5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  });
+}
+
+// ─── POSE UTILITIES ───────────────────────────────────────────────────────────
+function getKeypoint(keypoints, idx) {
+  const kp = keypoints[idx];
+  if (kp && kp.score > 0.25) return kp;
+  return null;
+}
+function avgY(a, b) {
+  if (a && b) return (a.y + b.y) / 2;
+  if (a) return a.y;
+  if (b) return b.y;
+  return null;
+}
+function avgX(a, b) {
+  if (a && b) return (a.x + b.x) / 2;
+  if (a) return a.x;
+  if (b) return b.x;
+  return null;
+}
+
+// ─── CALIBRATION LOGIC ────────────────────────────────────────────────────────
+function computeScale(keypoints) {
+  const nose = getKeypoint(keypoints, 0);
+  const lAnkle = getKeypoint(keypoints, 15);
+  const rAnkle = getKeypoint(keypoints, 16);
+  if (!nose) return null;
+  const ankleY = avgY(lAnkle, rAnkle);
+  if (ankleY === null) return null;
+  const noseToAnklePx = Math.abs(ankleY - nose.y);
+  if (noseToAnklePx < 50) return null;
+  const bHeightPx = noseToAnklePx / 0.85;
+  const pxPerCm = bHeightPx / athlete.height;
+  return { pxPerCm, bHeightPx };
+}
+
+// ─── DETECTION LOOP ───────────────────────────────────────────────────────────
+async function detectionLoop() {
+  rafId = requestAnimationFrame(detectionLoop);
+
+  if (!detector) return;
+
+  const mode = loopMode;
+  if (!mode) return;
+
+  const video = mode === 'calibrate'
+    ? document.getElementById('calib-video')
+    : document.getElementById('rec-video');
+
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+
+  let poses;
+  try {
+    poses = await detector.estimatePoses(video);
+  } catch (e) { return; }
+
+  const keypoints = poses && poses[0] ? poses[0].keypoints : null;
+
+  if (mode === 'calibrate') {
+    runCalibFrame(video, keypoints);
+  } else if (mode === 'record') {
+    runRecordFrame(video, keypoints);
+  }
+}
+
+// ─── CALIBRATION FRAME ────────────────────────────────────────────────────────
+function runCalibFrame(video, keypoints) {
+  const canvas = document.getElementById('calib-canvas');
+  const ctx = canvas.getContext('2d');
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  canvas.width = vw;
+  canvas.height = vh;
+
+  const dw = canvas.clientWidth;
+  const dh = canvas.clientHeight;
+  const sx = dw / vw;
+  const sy = dh / vh;
+
+  ctx.clearRect(0, 0, vw, vh);
+
+  const badge = document.getElementById('calib-status-badge');
+
+  if (!keypoints) {
+    badge.textContent = 'Keep in frame!';
+    badge.style.color = '#f85149';
+    return;
+  }
+
+  drawSkeleton(ctx, keypoints, 1, 1);
+
+  const result = computeScale(keypoints);
+  if (result) {
+    detectedScale = result;
+    badge.textContent = `Detected: ${result.pxPerCm.toFixed(2)} px/cm`;
+    badge.style.color = '#3fb950';
+    document.getElementById('btn-detect').disabled = false;
+    document.getElementById('btn-lock-calib').disabled = false;
+  } else {
+    badge.textContent = 'Full body needed';
+    badge.style.color = '#e3b341';
+  }
+}
+
+// ─── RECORD FRAME ─────────────────────────────────────────────────────────────
+function runRecordFrame(video, keypoints) {
+  const canvas = document.getElementById('rec-canvas');
+  const ctx = canvas.getContext('2d');
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  canvas.width = vw;
+  canvas.height = vh;
+
+  ctx.clearRect(0, 0, vw, vh);
+
+  if (!keypoints) {
+    ctx.fillStyle = 'rgba(248,81,73,0.8)';
+    ctx.font = 'bold 16px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Keep in frame!', vw / 2, 40);
+    return;
+  }
+
+  drawSkeleton(ctx, keypoints, 1, 1);
+  runStateMachine(keypoints);
+}
+
+// ─── JUMP STATE MACHINE ───────────────────────────────────────────────────────
+function setStatus(text, color) {
+  const el = document.getElementById('status-badge');
+  el.textContent = text;
+  el.style.color = color || '#c9d1d9';
+}
+function setPhase(text) { document.getElementById('lm-phase').textContent = text; }
+
+function resetJumpState() {
+  jumpState = 'IDLE';
+  countdownStart = null;
+  baselineFrames = [];
+  baselineAnkleY = null;
+  baselineHipY = null;
+  airborneStart = null;
+  squatMin = null;
+  takeoffTime = null;
+  landingTime = null;
+  djDropLandingTime = null;
+  djTakeoffTime = null;
+  djLandingTime = null;
+  djAnklesGone = false;
+  document.getElementById('lm-height').textContent = '—';
+  document.getElementById('lm-flight').textContent = '—';
+  setPhase('—');
+}
+
+function runStateMachine(keypoints) {
+  const now = performance.now();
+  const lAnkle = getKeypoint(keypoints, 15);
+  const rAnkle = getKeypoint(keypoints, 16);
+  const lHip = getKeypoint(keypoints, 11);
+  const rHip = getKeypoint(keypoints, 12);
+  const ankleY = avgY(lAnkle, rAnkle);
+  const hipY = avgY(lHip, rHip);
+  const anklesVisible = lAnkle !== null || rAnkle !== null;
+
+  const thresh5 = bodyHeightPx * 0.05;
+  const thresh3 = bodyHeightPx * 0.03;
+
+  switch (jumpState) {
+    case 'IDLE':
+      setStatus('READY', '#58a6ff');
+      setPhase('IDLE');
+      break;
+
+    case 'COUNTDOWN': {
+      const elapsed = (now - countdownStart) / 1000;
+      const remaining = Math.ceil(3 - elapsed);
+      if (remaining > 0) {
+        setStatus(`${remaining}`, '#e3b341');
+        setPhase('COUNTDOWN');
+      } else {
+        jumpState = 'BASELINE';
+        baselineFrames = [];
+        setStatus('BASELINE', '#e3b341');
+      }
+      break;
+    }
+
+    case 'BASELINE': {
+      if (ankleY !== null && hipY !== null) {
+        baselineFrames.push({ ankleY, hipY });
+      }
+      setStatus(`Calibrating… ${baselineFrames.length}/20`, '#e3b341');
+      setPhase('BASELINE');
+      if (baselineFrames.length >= 20) {
+        baselineAnkleY = baselineFrames.reduce((s, f) => s + f.ankleY, 0) / baselineFrames.length;
+        baselineHipY = baselineFrames.reduce((s, f) => s + f.hipY, 0) / baselineFrames.length;
+        squatMin = 0;
+        if (jumpType === 'DJ') {
+          jumpState = 'DROP_WAIT';
+          setStatus('Step off platform', '#58a6ff');
+          showToast('Get on platform, then step off!', 3000);
+        } else {
+          jumpState = 'MONITORING';
+          setStatus('MONITORING', '#3fb950');
+        }
+      }
+      break;
+    }
+
+    case 'MONITORING': {
+      setPhase('MONITORING');
+      if (ankleY === null) break;
+      const ankleDisp = baselineAnkleY - ankleY; // positive = up
+      if (hipY !== null) {
+        const hipDisp = hipY - baselineHipY; // positive = down (squat)
+        if (hipDisp > squatMin) squatMin = hipDisp;
+      }
+      if (ankleDisp > thresh5) {
+        takeoffTime = now;
+        airborneStart = now;
+        jumpState = 'AIRBORNE';
+        setStatus('AIRBORNE', '#3fb950');
+      }
+      break;
+    }
+
+    case 'AIRBORNE': {
+      setPhase('AIRBORNE');
+      const flightSoFar = (now - airborneStart) / 1000;
+      const hSoFar = calcHeight(flightSoFar);
+      document.getElementById('lm-height').textContent = hSoFar.toFixed(1) + ' cm';
+      document.getElementById('lm-flight').textContent = Math.round(flightSoFar * 1000) + ' ms';
+      if (ankleY !== null) {
+        const ankleDisp = baselineAnkleY - ankleY;
+        if (ankleDisp < thresh5) {
+          landingTime = now;
+          jumpState = 'DONE';
+          finishJump();
+        }
+      }
+      break;
+    }
+
+    // DJ STATES
+    case 'DROP_WAIT': {
+      setPhase('DROP_WAIT');
+      setStatus('Waiting for drop…', '#58a6ff');
+      if (!anklesVisible) {
+        djAnklesGone = true;
+      }
+      if (djAnklesGone && anklesVisible && ankleY !== null) {
+        const ankleDisp = baselineAnkleY - ankleY;
+        if (Math.abs(ankleDisp) < thresh5 * 2) {
+          djDropLandingTime = now;
+          jumpState = 'DROP_LANDING';
+          setStatus('LANDED — JUMP!', '#e3b341');
+          showToast('Landed! Jump now!');
+        }
+      }
+      break;
+    }
+
+    case 'DROP_LANDING': {
+      setPhase('DROP LAND');
+      if (ankleY === null) break;
+      const ankleDisp = baselineAnkleY - ankleY;
+      if (ankleDisp > thresh5) {
+        djTakeoffTime = now;
+        airborneStart = now;
+        jumpState = 'DROP_AIRBORNE';
+        setStatus('AIRBORNE', '#3fb950');
+      }
+      break;
+    }
+
+    case 'DROP_AIRBORNE': {
+      setPhase('DJ AIR');
+      const flightSoFar = (now - airborneStart) / 1000;
+      const hSoFar = calcHeight(flightSoFar);
+      document.getElementById('lm-height').textContent = hSoFar.toFixed(1) + ' cm';
+      document.getElementById('lm-flight').textContent = Math.round(flightSoFar * 1000) + ' ms';
+      if (ankleY !== null) {
+        const ankleDisp = baselineAnkleY - ankleY;
+        if (ankleDisp < thresh5) {
+          djLandingTime = now;
+          jumpState = 'DONE';
+          finishJump();
+        }
+      }
+      break;
+    }
+
+    case 'DONE':
+      break;
+  }
+}
+
+function calcHeight(flightTimeSec) {
+  return (G * flightTimeSec * flightTimeSec / 8) * 100;
+}
+
+function finishJump() {
+  let jumpHeight, flightTime, squatDepth = null, rsi = null, gct = null;
+
+  if (jumpType === 'DJ') {
+    const ft = (djLandingTime - djTakeoffTime) / 1000;
+    flightTime = ft;
+    jumpHeight = calcHeight(ft);
+    const gctSec = (djTakeoffTime - djDropLandingTime) / 1000;
+    gct = Math.round(gctSec * 1000);
+    rsi = parseFloat((jumpHeight / 100 / gctSec).toFixed(2));
+  } else {
+    const ft = (landingTime - takeoffTime) / 1000;
+    flightTime = ft;
+    jumpHeight = calcHeight(ft);
+    if (jumpType === 'CMJ' && squatMin !== null && pixelPerCm) {
+      squatDepth = parseFloat((squatMin / pixelPerCm).toFixed(1));
+    }
+  }
+
+  jumpHeight = parseFloat(jumpHeight.toFixed(1));
+  const flightMs = Math.round(flightTime * 1000);
+
+  const record = {
+    id: Date.now(),
+    type: jumpType,
+    height: jumpHeight,
+    flightMs,
+    squatDepth,
+    rsi,
+    gct,
+    ts: new Date().toISOString()
+  };
+  session.push(record);
+  saveSession();
+
+  setStatus('DONE ✓', '#3fb950');
+  document.getElementById('lm-height').textContent = jumpHeight + ' cm';
+  document.getElementById('lm-flight').textContent = flightMs + ' ms';
+
+  showResult(record);
+  showToast(`Jump: ${jumpHeight} cm | ${flightMs} ms`);
+
+  document.getElementById('btn-record').disabled = false;
+  document.getElementById('btn-cancel').disabled = true;
+}
+
+function showResult(rec) {
+  const box = document.getElementById('result-box');
+  const grid = document.getElementById('result-grid');
+  const items = [
+    { label: 'Jump Height', value: rec.height + ' cm' },
+    { label: 'Flight Time', value: rec.flightMs + ' ms' },
+  ];
+  if (rec.squatDepth !== null) items.push({ label: 'Squat Depth', value: rec.squatDepth + ' cm' });
+  if (rec.rsi !== null) items.push({ label: 'RSI', value: rec.rsi });
+  if (rec.gct !== null) items.push({ label: 'GCT', value: rec.gct + ' ms' });
+  grid.innerHTML = items.map(i =>
+    `<div class="result-item"><div class="ri-label">${i.label}</div><div class="ri-value">${i.value}</div></div>`
+  ).join('');
+  box.classList.add('visible');
+}
+
+// ─── SUMMARY ──────────────────────────────────────────────────────────────────
+function renderSummary() {
+  const noData = document.getElementById('summary-no-data');
+  const content = document.getElementById('summary-content');
+  if (session.length === 0) {
+    noData.style.display = 'block';
+    content.style.display = 'none';
+    return;
+  }
+  noData.style.display = 'none';
+  content.style.display = 'block';
+
+  const heights = session.map(j => j.height);
+  const flights = session.map(j => j.flightMs);
+  const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+  const avgH = avg(heights).toFixed(1);
+  const bestH = Math.max(...heights).toFixed(1);
+  const avgFt = Math.round(avg(flights));
+  const rsiJumps = session.filter(j => j.rsi !== null);
+  const sqJumps = session.filter(j => j.squatDepth !== null);
+
+  let cards = `
+    <div class="card"><div class="card-title">Avg Height</div><div class="card-value">${avgH}<span class="card-unit"> cm</span></div></div>
+    <div class="card"><div class="card-title">Best Height</div><div class="card-value">${bestH}<span class="card-unit"> cm</span></div></div>
+    <div class="card"><div class="card-title">Avg Flight</div><div class="card-value">${avgFt}<span class="card-unit"> ms</span></div></div>
+    <div class="card"><div class="card-title">Total Jumps</div><div class="card-value">${session.length}</div></div>
+  `;
+  if (rsiJumps.length > 0) {
+    const avgRsi = avg(rsiJumps.map(j => j.rsi)).toFixed(2);
+    cards += `<div class="card"><div class="card-title">Avg RSI</div><div class="card-value">${avgRsi}</div></div>`;
+  }
+  if (sqJumps.length > 0) {
+    const avgSq = avg(sqJumps.map(j => j.squatDepth)).toFixed(1);
+    cards += `<div class="card"><div class="card-title">Avg Squat Depth</div><div class="card-value">${avgSq}<span class="card-unit"> cm</span></div></div>`;
+  }
+  document.getElementById('avg-cards').innerHTML = cards;
+
+  // Chart
+  const labels = session.map((_, i) => `J${i + 1}`);
+  const chartCanvas = document.getElementById('height-chart');
+  if (heightChart) { heightChart.destroy(); heightChart = null; }
+  heightChart = new Chart(chartCanvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Jump Height (cm)',
+        data: heights,
+        backgroundColor: heights.map(h => h === Math.max(...heights) ? '#3fb950' : '#58a6ff'),
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+        y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' }, beginAtZero: true,
+             title: { display: true, text: 'cm', color: '#8b949e' } }
+      }
+    }
+  });
+
+  // Table
+  const tbody = document.getElementById('jump-tbody');
+  tbody.innerHTML = session.map((j, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td><strong>${j.type}</strong></td>
+      <td>${j.height}</td>
+      <td>${j.flightMs}</td>
+      <td>${j.squatDepth !== null ? j.squatDepth : '—'}</td>
+      <td>${j.rsi !== null ? j.rsi : '—'}</td>
+      <td>${j.gct !== null ? j.gct : '—'}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteJump(${j.id})">✕</button></td>
+    </tr>
+  `).join('');
+}
+
+function deleteJump(id) {
+  session = session.filter(j => j.id !== id);
+  saveSession();
+  renderSummary();
+  showToast('Jump deleted');
+}
+
+// ─── CSV EXPORT ───────────────────────────────────────────────────────────────
+function exportCSV() {
+  const headers = ['#', 'Type', 'Height (cm)', 'Flight (ms)', 'Squat Depth (cm)', 'RSI', 'GCT (ms)', 'Timestamp'];
+  const rows = session.map((j, i) => [
+    i + 1, j.type, j.height, j.flightMs,
+    j.squatDepth !== null ? j.squatDepth : '',
+    j.rsi !== null ? j.rsi : '',
+    j.gct !== null ? j.gct : '',
+    j.ts
+  ]);
+  const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `jump-session-${athlete.name.replace(/\s+/g, '_')}-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('CSV exported!');
+}
+
+// ─── HEADER ───────────────────────────────────────────────────────────────────
+function updateHeader() {
+  const el = document.getElementById('header-info');
+  if (athlete.name) {
+    el.innerHTML = `${athlete.name}<br>${athlete.height} cm / ${athlete.weight} kg`;
+  }
+}
+
+// ─── EVENT WIRING ─────────────────────────────────────────────────────────────
+document.getElementById('btn-start-calib').addEventListener('click', async () => {
+  const name = document.getElementById('inp-name').value.trim();
+  const height = parseFloat(document.getElementById('inp-height').value);
+  const weight = parseFloat(document.getElementById('inp-weight').value);
+  if (!name) { showToast('Please enter athlete name'); return; }
+  if (!height || height < 100) { showToast('Please enter valid height (100–250 cm)'); return; }
+  if (!weight || weight < 30) { showToast('Please enter valid weight'); return; }
+  athlete = { name, height, weight };
+  saveAthlete();
+  updateHeader();
+
+  const ok = await startCamera();
+  if (!ok) return;
+  attachStreamToVideo(document.getElementById('calib-video'));
+
+  showScreen('calib');
+  document.getElementById('calib-loading').style.display = 'flex';
+
+  if (!detector) {
+    const loaded = await loadModel();
+    if (!loaded) return;
+  }
+  document.getElementById('calib-loading').style.display = 'none';
+  document.getElementById('calib-status-badge').textContent = 'Stand in frame';
+  document.getElementById('btn-detect').disabled = false;
+
+  if (!rafId) detectionLoop();
+});
+
+document.getElementById('btn-back-setup').addEventListener('click', () => {
+  showScreen('setup');
+  loopMode = null;
+});
+
+document.getElementById('btn-detect').addEventListener('click', () => {
+  if (detectedScale) {
+    pixelPerCm = detectedScale.pxPerCm;
+    bodyHeightPx = detectedScale.bHeightPx;
+    document.getElementById('calib-px-cm').textContent = pixelPerCm.toFixed(2) + ' px/cm';
+    document.getElementById('calib-result').classList.add('visible');
+    document.getElementById('btn-lock-calib').disabled = false;
+    showToast('Scale detected! Press Lock Calibration.');
+  } else {
+    showToast('No pose detected. Stand in full frame.');
+  }
+});
+
+document.getElementById('btn-lock-calib').addEventListener('click', () => {
+  if (!pixelPerCm) { showToast('Detect pose first'); return; }
+  calibLocked = true;
+  saveCalib();
+  showToast('Calibration locked!');
+  document.getElementById('bottom-nav').classList.add('visible');
+  attachStreamToVideo(document.getElementById('rec-video'));
+  showScreen('record');
+  loopMode = 'record';
+});
+
+// Jump type buttons
+document.querySelectorAll('.type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    jumpType = btn.dataset.type;
+    document.getElementById('dj-height-wrap').style.display = jumpType === 'DJ' ? 'block' : 'none';
+  });
+});
+
+document.getElementById('btn-record').addEventListener('click', () => {
+  if (!calibLocked) { showToast('Please calibrate first'); return; }
+  resetJumpState();
+  jumpState = 'COUNTDOWN';
+  countdownStart = performance.now();
+  document.getElementById('btn-record').disabled = true;
+  document.getElementById('btn-cancel').disabled = false;
+  document.getElementById('result-box').classList.remove('visible');
+  setStatus('3', '#e3b341');
+});
+
+document.getElementById('btn-cancel').addEventListener('click', () => {
+  resetJumpState();
+  document.getElementById('btn-record').disabled = false;
+  document.getElementById('btn-cancel').disabled = true;
+  setStatus('READY', '#58a6ff');
+  showToast('Cancelled');
+});
+
+document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
+
+document.getElementById('btn-new-session').addEventListener('click', () => {
+  if (!confirm('Start new session? This will clear all jumps.')) return;
+  session = [];
+  saveSession();
+  renderSummary();
+  showToast('New session started');
+});
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+async function init() {
+  loadAthlete();
+  loadSession();
+  loadCalib();
+
+  // Pre-fill form
+  if (athlete.name) document.getElementById('inp-name').value = athlete.name;
+  if (athlete.height) document.getElementById('inp-height').value = athlete.height;
+  if (athlete.weight) document.getElementById('inp-weight').value = athlete.weight;
+
+  updateHeader();
+
+  // If already calibrated and camera is available, skip to record
+  if (calibLocked && athlete.name) {
+    const ok = await startCamera();
+    if (ok) {
+      if (!detector) await loadModel();
+      document.getElementById('bottom-nav').classList.add('visible');
+      attachStreamToVideo(document.getElementById('rec-video'));
+      showScreen('record');
+      loopMode = 'record';
+      if (!rafId) detectionLoop();
+    }
+  }
+}
+
+init();
+</script>
+</body>
+</html>
